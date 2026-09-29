@@ -1,0 +1,3 @@
+fast-alpr[onnx-gpu]==0.4.0
+onnxruntime-gpu[cuda,cudnn]==1.30.0
+# CPU-only deployment: replace both lines with  fast-alpr[onnx]==0.4.0

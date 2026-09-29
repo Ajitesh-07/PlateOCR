@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Benchmark dataset (re-download: see README "Benchmarking")
+data/
+
+# Generated results (annotated images, JSON, failure lists)
+outputs/
+
+# Model weights (downloaded to ~/.cache on first run; keep local copies out of git)
+models/
+*.onnx
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
