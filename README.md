@@ -25,7 +25,16 @@ Measured on the [OpenALPR end-to-end benchmark](https://github.com/openalpr/benc
 - **By region (default models):** EU 92.6% (99.1% ignoring O vs 0), Brazil 98.2%, US 86.0%.
 - **CPU:** about 355 ms per image with the default models.
 
-> **India:** out of the box, only **31–35%** of Indian plates are read exactly (77–81% of characters correct). The OCR model was never trained on Indian plates. Fine-tune it before deploying in India; see [RESEARCH.md](RESEARCH.md#india-out-of-the-box-it-does-not-work-well-enough).
+### India
+
+The global OCR model reads only **35%** of Indian plates exactly, because it was never trained on them. A version fine-tuned on Indian plates, combined with Indian plate-format decoding, reads **72.7%** exactly (92.6% of characters correct) on a held-out set from about 30 states. Full details are in [RESEARCH.md](RESEARCH.md#india-fine-tuning-results).
+
+| Setup | Indian test set (exact) | Latency per plate (RTX 4060 laptop) |
+|---|---|---|
+| Global `cct-xs-v2` | 35.4% | 6.4 ms |
+| India `cct-s-v2` (round 5) + `--plate-format india` | **72.7%** | 8.5 ms |
+
+The India model is **India-only**: it forgets many non-Indian plates. Use the global model for other regions.
 
 ## Setup
 
@@ -53,7 +62,12 @@ python infer.py images/ --out outputs/ --json results.json  # folder, annotated 
 python infer.py car.jpg --device cpu                        # force CPU
 python infer.py car.jpg --min-ocr-conf 0.7                  # drop low-confidence reads
 python infer.py car.jpg --detector yolo-v9-t-384-license-plate-end2end --ocr cct-xs-v2-global-model  # fast models
+
+# India: fine-tuned OCR + Indian plate-format decoding
+python infer.py car.jpg --ocr models/india_r5_best/india_cct_s_v2_r5_best.onnx --plate-format india
 ```
+
+`models/` is not in git (`*.onnx` is ignored). Keep the fine-tuned India model somewhere you control, such as a GitHub release, and put it at that path. Its plate config YAML sits next to the `.onnx`; `export_onnx.py` writes both.
 
 Example output:
 
@@ -68,7 +82,9 @@ Options:
 | `--device` | `auto` | `auto` tries CUDA, then DirectML, then CPU. `cuda` fails if the GPU can't be used. `cpu` forces CPU. |
 | `--det-conf` | `0.4` | Detector confidence threshold. Lower it to find more plates, at the cost of more false boxes. |
 | `--min-ocr-conf` | `0.0` | Drop reads whose mean character confidence is below this value. |
-| `--detector` / `--ocr` | `s-608` / `cct-s-v2` | Model names; the full list is in [RESEARCH.md](RESEARCH.md#model-options). |
+| `--detector` / `--ocr` | `s-608` / `cct-s-v2` | Model names; the full list is in [RESEARCH.md](RESEARCH.md#model-options). `--ocr` also accepts a path to a fine-tuned `.onnx`. |
+| `--ocr-config` | next to `.onnx` | Plate config YAML for a custom `--ocr` model. Only needed if there isn't exactly one `*.yaml` next to it. |
+| `--plate-format` | none | `india` returns only plates that match the Indian format, choosing the most probable valid plate. |
 | `--out` | none | Folder to write images with the plates boxed and labelled. |
 | `--json` | none | File to write all results to as JSON. |
 
@@ -132,7 +148,9 @@ This prints, for each set: the share of plates found, exact-match accuracy (also
 
 ```
 infer.py          inference: PlateReader class + CLI
-evaluate.py       benchmark on the OpenALPR dataset
+plate_format.py   format-constrained decoding (Indian plate grammar)
+evaluate.py       benchmarks: OpenALPR (eu/br/us) + Indian sets
+finetune/         fine-tuning: build_dataset.py, remote_train.sh, export_onnx.py, model configs
 RESEARCH.md       model research, alternatives, measured results
 requirements.txt  pinned dependencies (GPU)
 samples/          test image

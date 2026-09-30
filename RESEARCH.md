@@ -70,7 +70,41 @@ Why:
 
 Indian plate-format rules (letter/digit fixes by position) only raise exact accuracy from 31% to about 37%.
 
-**For India, fine-tune the OCR on Indian plates** using `fast-plate-ocr`'s training CLI, starting from `cct-xs-v2`. The detector is less of a concern (80% found on the small full-photo sample), but it should be checked on a larger set.
+**For India, fine-tune the OCR on Indian plates** (done below). The detector is less of a concern (80% found on the small full-photo sample), but it should be checked on a larger set.
+
+### India: fine-tuning results
+
+**Setup:**
+- **Tooling:** `fast-plate-ocr`'s training CLI with the Keras 3 PyTorch backend. The scripts are in `finetune/`.
+- **Starting point:** each round starts from the pretrained global weights.
+- **Metrics:** "val" is 1,280 held-out real crops of 295 plates, mostly Gujarat. "test" is `in_crops`: 1,684 crops from about 30 states, 46% Maharashtra.
+- **No leakage:** every training plate whose text appears in the test set was removed. This mattered: 1,690 of the `kp00011` crops overlapped the test set.
+
+| Round | Model | Training data | Val | Test (plain) | Test + India format | Test chars | EU / BR / US |
+|---|---|---|---|---|---|---|---|
+| — | `cct-xs-v2` pretrained | — | — | 35.4% | — | 81.2% | 93.5 / 95.6 / 83.3 |
+| 1 | `cct-xs-v2` | real (10.7k) | 83.4% | 58.7% | 68.2% | 91.6% | 72.2 / 92.1 / 50.5 |
+| 2 | `cct-xs-v2` | real + `abtexp` synthetic (12k) | 85.2% | 63.0% | 63.7% | 91.0% | — |
+| 3 | `cct-xs-v2` | real + `abtexp` + `siddheshmm` (15k) | 86.2% | 66.5% | 67.0% | 91.4% | 39.8 / 33.3 / 12.2 |
+| 4 | `cct-s-v2` | real + `abtexp` + `siddheshmm` | 93.1% | 72.2% | **73.4%** | 93.0% | 35.2 / 59.6 / 13.5 |
+| **5** | **`cct-s-v2`** | **real + `abtexp`** (permissive licences only) | 92.6% | 72.0% | **72.7%** | 92.6% | 50.0 / 64.9 / 25.7 |
+
+The test margin of error is about ±2.2 points (95%, n = 1,684).
+
+**Recommended India model: round 5 + India format decoding** (`models/india_r5_best/`).
+- **Accuracy:** tied with round 4 (72.7% vs 73.4%).
+- **Licensing:** trained only on MIT, Apache-2.0 and CC0 data. `siddheshmm` has an unknown licence, and adding it made no measurable difference.
+- **Latency:** about 8.5 ms per crop on an RTX 4060 laptop, against 6.4 ms for the global `xs` model.
+
+**Findings:**
+- **Model size matters most.** `cct-s-v2` beats `cct-xs-v2` by about 5–6 points on test with the same data.
+- **Format decoding (`plate_format.py`) helps weaker models the most.** It picks the most probable *valid* Indian plate from the per-slot probabilities: +9.5 points on round 1, +0.5–1 on rounds 3–5. It mostly fixes invalid state codes (`MH` misread as `KH` or `HH`), which synthetic data also teaches.
+- **Synthetic data only helps without format decoding.** It raises plain decoding by 4–8 points, but adds little once format decoding is on.
+- **Fine-tuned models forget foreign plates.** Use them for India only, and keep the global model for other regions.
+- **The test set tops out around 93%.** 6.7% of `in_crops` labels don't match any valid Indian format, and most look like labelling errors (`MHD1CV9311`, `KA42TC131011`). One of them appears 17 times.
+- **Real-data diversity is now the limit.** The real training data is mostly Gujarat plates from one source. The next step is labelled crops from the actual deployment cameras, and frame voting for video.
+
+**Training cost:** rounds 3–5 ran on a rented RTX 5080 (vast.ai, $0.39/hr), each in 12–25 minutes. The whole session cost about $0.45. On Windows, data loading can't use multiple processes, so the laptop took about 4× longer per image.
 
 ## Alternatives considered
 
