@@ -1,11 +1,12 @@
-# Model card: `india-v1` (Indian license plate OCR)
+# Model card: `india-v1` / `india-v1.1` (Indian license plate OCR)
 
 An OCR model for **Indian** license plates, fine-tuned from `fast-plate-ocr`'s `cct-s-v2-global-model`. It reads the text on a cropped plate image. Use it together with the YOLOv9 plate detector and `--plate-format india`.
 
 | | |
 |---|---|
-| **Name / version** | `india-v1` (GitHub Release tag `india-ocr-v1`) |
-| **Files** | `india_ocr_v1.onnx` (4.6 MB), `india_ocr_v1_plate_config.yaml` |
+| **Name / version** | `india-v1.1` (release `india-ocr-v1.1`, recommended); `india-v1` (release `india-ocr-v1`) |
+| **Files** | `india_ocr_v1_1.onnx` (4.5 MB) + `india_ocr_v1_1_plate_config.yaml`; `india_ocr_v1.onnx` (4.6 MB) + `india_ocr_v1_plate_config.yaml` |
+| **v1 vs v1.1** | Same weights and identical predictions (500/500 real crops identical, max diff 1e-6; same `in_crops` score). v1.1 rewrites the export's 54 `Einsum` nodes as `MatMul`, which ONNX Runtime runs much faster. |
 | **Architecture** | CCT-S (Compact Convolutional Transformer), 10 character slots, alphabet `0-9 A-Z`, pad `_`. No region head. |
 | **Base model** | `cct_s_v2_global.keras` from [ankandrew/fast-plate-ocr](https://github.com/ankandrew/fast-plate-ocr) (MIT) |
 | **Trained** | 2026-09-30, round 5 in [RESEARCH.md](RESEARCH.md#india-fine-tuning-results) |
@@ -28,7 +29,14 @@ An OCR model for **Indian** license plates, fine-tuned from `fast-plate-ocr`'s `
 - **Margin of error:** about ±2.2 points (95%).
 - **Ceiling:** about 6.7% of the test labels don't follow any valid Indian format and look like labelling errors, so the test set can't show much more than about 93%.
 - **Validation:** 92.6% exact on held-out plates similar to the training data (mostly Gujarat).
-- **Latency:** about 8.5 ms per plate crop through `PlateReader` on an RTX 4060 laptop (onnxruntime-gpu). The model alone is under 1 ms.
+- **Latency** (RTX 4060 laptop, onnxruntime 1.30, batch 1, measured with 15 interleaved rounds x 200 runs):
+
+  | Model run only | `india-v1` | `india-v1.1` |
+  |---|---|---|
+  | GPU (CUDA) | 7.7 ms median, varies 5.2-8.1 | **4.9 ms**, steady 4.5-5.1 |
+  | CPU | 19.3 ms | **9.4 ms** |
+
+  Through `PlateReader` (resize + decode included) v1.1 takes ~5-6 ms per crop on GPU and ~7 ms on CPU. A full camera frame also needs the YOLOv9 plate detector (~10-15 ms model + ~9 ms preprocessing at 608 px on GPU).
 
 ## Training data
 
@@ -47,6 +55,7 @@ The data is rebuilt with `finetune/build_dataset.py --synthetic`, and the model 
 - **Mostly Gujarat plates in training.** Accuracy varies by state, roughly 60–84% on the test set.
 - **Older plates with 3 final digits** (e.g. `KL 34 A 465`): with `plate_format="india"`, the decoder forces 4 digits and may add one.
 - **Non-standard plates** (temporary, diplomatic, army): not covered by the Indian format decoder.
+- **At most 10 characters.** The model has 10 character slots, so 11-character plates (e.g. `DL01FXA1791`, a 2-digit district plus a 3-letter series) can never be read correctly.
 - **Low-confidence reads are often wrong.** Set `min_ocr_conf` (e.g. 0.5) in production.
 - **Not yet tested on the deployment cameras.** Expect different accuracy on your own footage; fine-tuning on it is the recommended next step.
 
