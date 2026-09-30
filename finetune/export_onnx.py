@@ -9,6 +9,10 @@ Output matches what fast-plate-ocr inference expects: uint8 NHWC input named "in
 output named "plate". Writes <out>/<name>.onnx and a plate config without regions (the fine-tuned
 model has no region head).
 
+The torch export keeps Keras' attention/dense einsums as ONNX `Einsum` nodes, which ONNX Runtime
+runs slowly; they are rewritten as `MatMul` (finetune/onnx_matmul.py, ~6x faster on CPU) unless
+--keep-einsum is given.
+
 Usage (from repo root):
     set KERAS_BACKEND=torch
     python finetune/export_onnx.py --model finetune/runs/.../best.keras --out models/india_ocr
@@ -30,6 +34,7 @@ import torch  # noqa: E402
 import yaml  # noqa: E402
 
 import fast_plate_ocr.train.model.layers  # noqa: E402,F401  (registers custom layers for loading)
+from onnx_matmul import einsum_to_matmul  # noqa: E402
 
 
 class _Wrapper(torch.nn.Module):
@@ -47,6 +52,7 @@ def main() -> None:
     ap.add_argument("--plate-config", type=Path, help="Defaults to plate_config.yaml next to --model")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--name", default="india_cct_xs_v2")
+    ap.add_argument("--keep-einsum", action="store_true", help="Skip the Einsum -> MatMul rewrite")
     args = ap.parse_args()
 
     cfg_path = args.plate_config or args.model.with_name("plate_config.yaml")
@@ -66,6 +72,9 @@ def main() -> None:
         prog = torch.onnx.export(wrapper, (dummy,), dynamo=True, input_names=["input"], output_names=["plate"])
     prog.optimize()
     prog.save(str(onnx_path))
+    if not args.keep_einsum:
+        n = einsum_to_matmul(onnx_path, onnx_path)
+        print(f"rewrote {n} Einsum nodes as MatMul")
 
     (args.out / f"{args.name}_plate_config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
 

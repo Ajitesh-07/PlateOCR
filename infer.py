@@ -60,6 +60,14 @@ CUSTOM_OCR_MODELS = {
         "config": ("india_ocr_v1_plate_config.yaml", "3f4718541abd7ba9e7fc050cfbda7463b64b9795d8c99689019c5b58a8e65b41"),
         "plate_format": "india",
     },
+    # Same weights and predictions as india-v1; Einsum ops rewritten as MatMul (onnx_matmul.py):
+    # ~2x faster on CPU and steadier on GPU. Recommended.
+    "india-v1.1": {
+        "tag": "india-ocr-v1.1",
+        "onnx": ("india_ocr_v1_1.onnx", "88731e2db53ef7df9be26c710378cb6e0e9bc29fd5c59c9602cbfe0db4806ad4"),
+        "config": ("india_ocr_v1_1_plate_config.yaml", "3f4718541abd7ba9e7fc050cfbda7463b64b9795d8c99689019c5b58a8e65b41"),
+        "plate_format": "india",
+    },
 }
 
 

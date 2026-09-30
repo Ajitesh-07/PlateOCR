@@ -62,7 +62,7 @@ python infer.py images/ --out outputs/ --json results.json  # folder, annotated 
 python infer.py car.jpg --device cpu                        # force CPU
 python infer.py car.jpg --min-ocr-conf 0.7                  # drop low-confidence reads
 python infer.py car.jpg --detector yolo-v9-t-384-license-plate-end2end --ocr cct-xs-v2-global-model  # fast models
-python infer.py car.jpg --ocr india-v1                      # Indian plates (see below)
+python infer.py car.jpg --ocr india-v1.1                    # Indian plates (see below)
 ```
 
 Example output:
@@ -78,9 +78,9 @@ Options:
 | `--device` | `auto` | `auto` tries CUDA, then DirectML, then CPU. `cuda` fails if the GPU can't be used. `cpu` forces CPU. |
 | `--det-conf` | `0.4` | Detector confidence threshold. Lower it to find more plates, at the cost of more false boxes. |
 | `--min-ocr-conf` | `0.0` | Drop reads whose mean character confidence is below this value. |
-| `--detector` / `--ocr` | `s-608` / `cct-s-v2` | Model names; the full list is in [RESEARCH.md](RESEARCH.md#model-options). `--ocr` also accepts a published model name (`india-v1`) or a path to a `.onnx`. |
+| `--detector` / `--ocr` | `s-608` / `cct-s-v2` | Model names; the full list is in [RESEARCH.md](RESEARCH.md#model-options). `--ocr` also accepts a published model name (`india-v1.1`, `india-v1`) or a path to a `.onnx`. |
 | `--ocr-config` | next to `.onnx` | Plate config YAML for a custom `--ocr` model. Only needed if there isn't exactly one `*.yaml` next to it. |
-| `--plate-format` | none (`india` for `india-v1`) | `india` returns only plates that match the Indian format, choosing the most probable valid plate. `none` turns it off. |
+| `--plate-format` | none (`india` for `india-v1.x`) | `india` returns only plates that match the Indian format, choosing the most probable valid plate. `none` turns it off. |
 | `--out` | none | Folder to write images with the plates boxed and labelled. |
 | `--json` | none | File to write all results to as JSON. |
 
@@ -112,19 +112,26 @@ If you already have a cropped plate, from your own detector for example, `reader
 
 ## Using the India model
 
-`india-v1` is published as a [GitHub Release](https://github.com/Ajitesh-07/PlateOCR/releases/tag/india-ocr-v1) of this repo, not stored in git. You don't need to download it yourself. Pass `india-v1` as the OCR model, and on first use `infer.py`:
+The India model is published as GitHub Releases of this repo, not stored in git:
+
+| Name | Release | Notes |
+|---|---|---|
+| **`india-v1.1`** (recommended) | [`india-ocr-v1.1`](https://github.com/Ajitesh-07/PlateOCR/releases/tag/india-ocr-v1.1) | Same weights and predictions as `india-v1` (72.7% on `in_crops`). Its `Einsum` ops are rewritten as `MatMul`, making it ~2x faster on CPU (9.4 vs 19.3 ms per crop) and steadier on GPU (~4.9 ms vs 5-8 ms). |
+| `india-v1` | [`india-ocr-v1`](https://github.com/Ajitesh-07/PlateOCR/releases/tag/india-ocr-v1) | Original export. Kept so pinned pipelines keep working. |
+
+You don't need to download it yourself. Pass `india-v1.1` as the OCR model, and on first use `infer.py`:
 
 1. downloads the model (4.6 MB) from the release;
 2. checks its SHA-256 checksum (a corrupted or tampered file is refused);
-3. caches it in `~/.cache/plate-ocr/india-v1/`;
+3. caches it in `~/.cache/plate-ocr/india-v1.1/`;
 4. turns on Indian plate-format decoding.
 
 ### Command line
 
 ```bash
-python infer.py car.jpg --ocr india-v1                          # detect + read Indian plates
-python infer.py frames/ --ocr india-v1 --min-ocr-conf 0.5 --json reads.json
-python infer.py car.jpg --ocr india-v1 --plate-format none      # raw model output, no format rules
+python infer.py car.jpg --ocr india-v1.1                        # detect + read Indian plates
+python infer.py frames/ --ocr india-v1.1 --min-ocr-conf 0.5 --json reads.json
+python infer.py car.jpg --ocr india-v1.1 --plate-format none    # raw model output, no format rules
 ```
 
 ### Python (in your own pipeline)
@@ -133,7 +140,7 @@ python infer.py car.jpg --ocr india-v1 --plate-format none      # raw model outp
 import cv2
 from infer import PlateReader
 
-reader = PlateReader(ocr_model="india-v1", min_ocr_conf=0.5)   # load once per process
+reader = PlateReader(ocr_model="india-v1.1", min_ocr_conf=0.5) # load once per process
 
 for p in reader.read(cv2.imread("car.jpg")):                  # full image: detect + OCR
     print(p.text, p.ocr_confidence, p.bbox)
@@ -146,9 +153,9 @@ text, conf = reader.read_crop(plate_crop_bgr)                 # you already have
 | Environment variable | Default | Use |
 |---|---|---|
 | `PLATE_OCR_CACHE` | `~/.cache/plate-ocr` | Where published models are stored. Pre-fill it (or bake it into a Docker image) for servers without internet access. |
-| `PLATE_OCR_MODEL_URL` | this repo's releases | Download base for a mirror. Files are fetched from `<base>/india-ocr-v1/<file>`. |
+| `PLATE_OCR_MODEL_URL` | this repo's releases | Download base for a mirror. Files are fetched from `<base>/<release tag>/<file>`, e.g. `<base>/india-ocr-v1.1/india_ocr_v1_1.onnx`. |
 
-To install it by hand, download the release files and put them in `$PLATE_OCR_CACHE/india-v1/`, or pass the file path directly: `--ocr path/to/india_ocr_v1.onnx --plate-format india`. `SHA256SUMS.txt` in the release lets you verify them (`sha256sum -c SHA256SUMS.txt`).
+To install it by hand, download the release files and put them in `$PLATE_OCR_CACHE/india-v1.1/`, or pass the file path directly: `--ocr path/to/india_ocr_v1_1.onnx --plate-format india`. `SHA256SUMS.txt` in the release lets you verify them (`sha256sum -c SHA256SUMS.txt`).
 
 ### Using the ONNX file directly (no `infer.py`)
 
@@ -162,7 +169,7 @@ For pipelines in other languages or runtimes:
 
 ### Publishing a new version (maintainers)
 
-1. **Train and export:** fine-tune (see `finetune/`), then export with `finetune/export_onnx.py`.
+1. **Train and export:** fine-tune (see `finetune/`), then export with `finetune/export_onnx.py`. The export rewrites `Einsum` as `MatMul` automatically (`finetune/onnx_matmul.py`, which also works on an existing `.onnx`).
 2. **Package:** rename the files to `india_ocr_vN.onnx` and `india_ocr_vN_plate_config.yaml`. Write `SHA256SUMS.txt` and update `MODEL_CARD.md`.
 3. **Release:** create a GitHub Release with tag `india-ocr-vN` and upload those files plus `MODEL_CARD.md`.
 4. **Register:** add an `india-vN` entry to `CUSTOM_OCR_MODELS` in `infer.py`, using the new tag, file names and SHA-256 values. Keep the old entries, so pipelines pinned to `india-v1` keep working.
@@ -203,7 +210,7 @@ This prints, for each set: the share of plates found, exact-match accuracy (also
 infer.py          inference: PlateReader class + CLI
 plate_format.py   format-constrained decoding (Indian plate grammar)
 evaluate.py       benchmarks: OpenALPR (eu/br/us) + Indian sets
-MODEL_CARD.md     india-v1: training data, metrics, limitations
+MODEL_CARD.md     india-v1 / v1.1: training data, metrics, limitations
 finetune/         fine-tuning: build_dataset.py, remote_train.sh, export_onnx.py, model configs
 RESEARCH.md       model research, alternatives, measured results
 requirements.txt  pinned dependencies (GPU)
