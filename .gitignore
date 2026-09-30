@@ -28,3 +28,6 @@ tensorboard_logs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Release packages (uploaded as GitHub Release assets, not committed)
+dist/

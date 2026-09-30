@@ -18,11 +18,14 @@ Library usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import os
 import statistics
 import sys
 import time
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -45,6 +48,20 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 DEFAULT_DETECTOR = "yolo-v9-s-608-license-plate-end2end"
 DEFAULT_OCR = "cct-s-v2-global-model"
 
+# Fine-tuned OCR models published as GitHub Release assets of this repo. `--ocr india-v1` downloads
+# them once into PLATE_OCR_CACHE (default ~/.cache/plate-ocr), checks the SHA-256, then reuses them.
+# PLATE_OCR_MODEL_URL overrides the download base (mirror, offline server); files are fetched from
+# <base>/<tag>/<file>. See MODEL_CARD.md.
+RELEASES_URL = "https://github.com/Ajitesh-07/PlateOCR/releases/download"
+CUSTOM_OCR_MODELS = {
+    "india-v1": {
+        "tag": "india-ocr-v1",
+        "onnx": ("india_ocr_v1.onnx", "6fbb878e1bec7e318c9b43d58f4093d5bb7cb21bfe9d7d5fc18047f6c007a6f8"),
+        "config": ("india_ocr_v1_plate_config.yaml", "3f4718541abd7ba9e7fc050cfbda7463b64b9795d8c99689019c5b58a8e65b41"),
+        "plate_format": "india",
+    },
+}
+
 
 @dataclass
 class Plate:
@@ -64,6 +81,32 @@ def _pick_providers(device: str) -> list[str]:
         raise RuntimeError(f"CUDA requested but not available. ONNX Runtime providers: {available}")
     preferred = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
     return [p for p in preferred if p in available]
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def fetch_custom_model(name: str) -> tuple[Path, Path]:
+    """Return local (onnx, plate_config) paths for a CUSTOM_OCR_MODELS entry, downloading if needed."""
+    spec = CUSTOM_OCR_MODELS[name]
+    cache = Path(os.environ.get("PLATE_OCR_CACHE", Path.home() / ".cache" / "plate-ocr")) / name
+    base = os.environ.get("PLATE_OCR_MODEL_URL", RELEASES_URL).rstrip("/")
+    cache.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for fname, sha in (spec["onnx"], spec["config"]):
+        dest = cache / fname
+        if not (dest.exists() and _sha256(dest) == sha):
+            url = f"{base}/{spec['tag']}/{fname}"
+            log.info("Downloading %s", url)
+            tmp = dest.with_suffix(dest.suffix + ".part")
+            urllib.request.urlretrieve(url, tmp)
+            if _sha256(tmp) != sha:
+                tmp.unlink()
+                raise RuntimeError(f"Checksum mismatch for {url}; refusing to use it")
+            tmp.replace(dest)
+        paths.append(dest)
+    return paths[0], paths[1]
 
 
 class FormatOCR(BaseOCR):
@@ -105,7 +148,17 @@ class PlateReader:
     ) -> None:
         """`ocr_model` is a hub name or a path to a fine-tuned .onnx. For a path, `ocr_config` is its
         plate config YAML; if omitted, the only *.yaml next to the .onnx is used.
-        `plate_format="india"` only returns plates that match the Indian format (see plate_format.py)."""
+        `ocr_model` can also name a published fine-tuned model (CUSTOM_OCR_MODELS, e.g. "india-v1"); it is
+        downloaded on first use and brings its own default `plate_format`.
+        `plate_format="india"` only returns plates that match the Indian format (see plate_format.py);
+        "none" turns format decoding off, even for models that default to it."""
+        if ocr_model in CUSTOM_OCR_MODELS:
+            spec = CUSTOM_OCR_MODELS[ocr_model]
+            onnx_path, cfg_path = fetch_custom_model(ocr_model)
+            ocr_model, ocr_config = str(onnx_path), str(cfg_path)
+            plate_format = plate_format or spec["plate_format"]
+        if plate_format == "none":
+            plate_format = None
         if device in ("auto", "cuda"):
             # onnxruntime-gpu >= 1.21 can load CUDA/cuDNN DLLs shipped via pip (nvidia-* wheels)
             try:
@@ -256,10 +309,11 @@ def main() -> int:
     ap.add_argument("--out", help="Directory to write annotated images to")
     ap.add_argument("--json", help="Write all results to this JSON file")
     ap.add_argument("--detector", default=DEFAULT_DETECTOR)
-    ap.add_argument("--ocr", default=DEFAULT_OCR, help="Hub model name or path to a fine-tuned .onnx")
+    ap.add_argument("--ocr", default=DEFAULT_OCR, help="Hub model name, published model (india-v1) or path to a .onnx")
     ap.add_argument("--ocr-config", help="Plate config YAML for a custom --ocr .onnx")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
-    ap.add_argument("--plate-format", choices=sorted(FormatOCR.DECODERS), help="Constrain reads to a plate format")
+    ap.add_argument("--plate-format", choices=[*sorted(FormatOCR.DECODERS), "none"],
+                    help="Constrain reads to a plate format (published models set a default; 'none' disables)")
     ap.add_argument("--det-conf", type=float, default=0.4, help="Detector confidence threshold")
     ap.add_argument("--min-ocr-conf", type=float, default=0.0, help="Drop reads below this OCR confidence")
     args = ap.parse_args()
