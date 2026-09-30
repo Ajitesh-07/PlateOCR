@@ -54,6 +54,24 @@ The benchmark has 444 images (108 EU, 114 BR, 222 US). "Exact" means the whole p
 
 On CPU (laptop), the default config takes about 355 ms per image. Every error comes from OCR, not detection. About a third of the default config's errors are O vs 0 only. The rest are look-alike characters (8/B, 6/G, 1/I, W/K) and vanity plates, and they are concentrated in US plates. Reproduce with `python evaluate.py --sets eu br us`.
 
+### India: out of the box, it does not work well enough
+
+| Set | Plates | Found | Exact | Exact (O=0) | Characters correct |
+|---|---|---|---|---|---|
+| `in_full`: Datacluster sample, full photos | 25 | 80% | 32% | 32% | 67% |
+| `in_crops`: plate crops, ~30 states, OCR only, `cct-s-v2` | 1684 | — | 31.2% | 37.1% | 77.3% |
+| `in_crops` with `cct-xs-v2` (best pretrained OCR) | 1684 | — | 35.4% | 40.0% | 81.2% |
+| `in_crops` with the other models (`cct-*-v1`, `mobile-vit-v2`) | 1684 | — | 5–8% | — | 51–67% |
+
+Why:
+- **Not trained on India.** India is not among the ~65 regions in the OCR model's training set (see `plate_regions` in the model config).
+- **Plate length.** Indian plates are usually 10 characters, which is the model's maximum. It often stops a character early: 125 plates were read as exactly their first 9 characters.
+- **Hard plates.** Indian plates add non-standard fonts, dots between groups, two-line layouts and yellow commercial plates.
+
+Indian plate-format rules (letter/digit fixes by position) only raise exact accuracy from 31% to about 37%.
+
+**For India, fine-tune the OCR on Indian plates** using `fast-plate-ocr`'s training CLI, starting from `cct-xs-v2`. The detector is less of a concern (80% found on the small full-photo sample), but it should be checked on a larger set.
+
 ## Alternatives considered
 
 | Option | Verdict |

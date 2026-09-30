@@ -30,6 +30,11 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 from fast_alpr import ALPR
+from fast_alpr.base import BaseOCR, OcrResult
+from fast_plate_ocr.core.process import preprocess_image
+from fast_plate_ocr.inference.plate_recognizer import _load_image_from_source
+
+from plate_format import decode_india
 
 log = logging.getLogger("alpr")
 
@@ -61,6 +66,29 @@ def _pick_providers(device: str) -> list[str]:
     return [p for p in preferred if p in available]
 
 
+class FormatOCR(BaseOCR):
+    """Wraps fast-alpr's DefaultOCR and decodes the raw per-slot probabilities under a plate
+    grammar (see plate_format.py) instead of taking the argmax per slot."""
+
+    DECODERS = {"india": decode_india}
+
+    def __init__(self, inner: BaseOCR, plate_format: str) -> None:
+        self.inner = inner
+        self.decode = self.DECODERS[plate_format]
+        self.rec = inner.ocr_model  # fast_plate_ocr LicensePlateRecognizer
+
+    def predict(self, cropped_plate: np.ndarray) -> OcrResult | None:
+        if cropped_plate is None or cropped_plate.size == 0:
+            return None
+        cfg = self.rec.config
+        code = {"grayscale": cv2.COLOR_BGR2GRAY, "rgb": cv2.COLOR_BGR2RGB}[cfg.image_color_mode]
+        x = preprocess_image(_load_image_from_source(cv2.cvtColor(cropped_plate, code), cfg))
+        out = self.rec.model.run([self.rec.plate_output_name], {"input": x})[0]
+        probs = out.reshape(cfg.max_plate_slots, len(cfg.alphabet))
+        text, confs = self.decode(probs, cfg.alphabet, cfg.pad_char)
+        return OcrResult(text=text, confidence=confs)
+
+
 class PlateReader:
     """Loads the models once; call `read()` per frame. Not thread-safe per instance for drawing,
     but `read()` itself is safe to call from one worker at a time."""
@@ -72,7 +100,12 @@ class PlateReader:
         device: str = "auto",
         det_conf: float = 0.4,
         min_ocr_conf: float = 0.0,
+        ocr_config: str | None = None,
+        plate_format: str | None = None,
     ) -> None:
+        """`ocr_model` is a hub name or a path to a fine-tuned .onnx. For a path, `ocr_config` is its
+        plate config YAML; if omitted, the only *.yaml next to the .onnx is used.
+        `plate_format="india"` only returns plates that match the Indian format (see plate_format.py)."""
         if device in ("auto", "cuda"):
             # onnxruntime-gpu >= 1.21 can load CUDA/cuDNN DLLs shipped via pip (nvidia-* wheels)
             try:
@@ -81,7 +114,7 @@ class PlateReader:
                 pass
         self.min_ocr_conf = min_ocr_conf
         providers = _pick_providers(device)
-        self.alpr = self._build(detector_model, ocr_model, det_conf, providers)
+        self.alpr = self._build(detector_model, ocr_model, ocr_config, det_conf, providers)
         try:
             _self_test(self.alpr)
         except Exception as e:  # noqa: BLE001
@@ -91,19 +124,32 @@ class PlateReader:
             # fast-alpr swallows that and returns zero plates, so fail over explicitly.
             log.warning("GPU self-test failed, falling back to CPU: %s", str(e).splitlines()[0])
             providers = ["CPUExecutionProvider"]
-            self.alpr = self._build(detector_model, ocr_model, det_conf, providers)
+            self.alpr = self._build(detector_model, ocr_model, ocr_config, det_conf, providers)
             _self_test(self.alpr)
         self.providers = providers
+        if plate_format:
+            self.alpr.ocr = FormatOCR(self.alpr.ocr, plate_format)
         log.info("Running on: %s", providers[0])
 
     @staticmethod
-    def _build(detector_model: str, ocr_model: str, det_conf: float, providers: list[str]) -> ALPR:
+    def _build(
+        detector_model: str, ocr_model: str, ocr_config: str | None, det_conf: float, providers: list[str]
+    ) -> ALPR:
+        ocr_kwargs: dict = {"ocr_model": ocr_model}
+        if ocr_model.endswith(".onnx"):
+            model_path = Path(ocr_model)
+            if ocr_config is None:
+                yamls = list(model_path.parent.glob("*.yaml"))
+                if len(yamls) != 1:
+                    raise ValueError(f"Pass ocr_config: expected one *.yaml next to {model_path}, found {len(yamls)}")
+                ocr_config = str(yamls[0])
+            ocr_kwargs = {"ocr_model": None, "ocr_model_path": model_path, "ocr_config_path": ocr_config}
         return ALPR(
             detector_model=detector_model,
             detector_conf_thresh=det_conf,
             detector_providers=providers,
-            ocr_model=ocr_model,
             ocr_providers=providers,
+            **ocr_kwargs,
         )
 
     def read(self, image: np.ndarray | str | Path) -> list[Plate]:
@@ -128,6 +174,14 @@ class PlateReader:
                 )
             )
         return plates
+
+    def read_crop(self, plate_img: np.ndarray) -> tuple[str, float]:
+        """OCR only, for an image that is already a cropped plate. Returns (text, confidence)."""
+        r = self.alpr.ocr.predict(plate_img)
+        if r is None or not r.text:
+            return "", 0.0
+        conf = statistics.mean(r.confidence) if isinstance(r.confidence, list) else r.confidence
+        return r.text.replace("_", "").strip(), float(conf)
 
 
 _ORT_DTYPES = {"tensor(float)": np.float32, "tensor(float16)": np.float16, "tensor(uint8)": np.uint8}
@@ -202,8 +256,10 @@ def main() -> int:
     ap.add_argument("--out", help="Directory to write annotated images to")
     ap.add_argument("--json", help="Write all results to this JSON file")
     ap.add_argument("--detector", default=DEFAULT_DETECTOR)
-    ap.add_argument("--ocr", default=DEFAULT_OCR)
+    ap.add_argument("--ocr", default=DEFAULT_OCR, help="Hub model name or path to a fine-tuned .onnx")
+    ap.add_argument("--ocr-config", help="Plate config YAML for a custom --ocr .onnx")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    ap.add_argument("--plate-format", choices=sorted(FormatOCR.DECODERS), help="Constrain reads to a plate format")
     ap.add_argument("--det-conf", type=float, default=0.4, help="Detector confidence threshold")
     ap.add_argument("--min-ocr-conf", type=float, default=0.0, help="Drop reads below this OCR confidence")
     args = ap.parse_args()
@@ -215,7 +271,7 @@ def main() -> int:
         return 1
 
     t0 = time.perf_counter()
-    reader = PlateReader(args.detector, args.ocr, args.device, args.det_conf, args.min_ocr_conf)
+    reader = PlateReader(args.detector, args.ocr, args.device, args.det_conf, args.min_ocr_conf, args.ocr_config, args.plate_format)
     log.info("Models loaded in %.2fs", time.perf_counter() - t0)
 
     out_dir = Path(args.out) if args.out else None

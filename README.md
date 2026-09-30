@@ -25,6 +25,8 @@ Measured on the [OpenALPR end-to-end benchmark](https://github.com/openalpr/benc
 - **By region (default models):** EU 92.6% (99.1% ignoring O vs 0), Brazil 98.2%, US 86.0%.
 - **CPU:** about 355 ms per image with the default models.
 
+> **India:** out of the box, only **31–35%** of Indian plates are read exactly (77–81% of characters correct). The OCR model was never trained on Indian plates. Fine-tune it before deploying in India; see [RESEARCH.md](RESEARCH.md#india-out-of-the-box-it-does-not-work-well-enough).
+
 ## Setup
 
 You need Python 3.10 or newer. For the GPU, you need an NVIDIA driver that supports CUDA 13; check the "CUDA Version" line in `nvidia-smi`. You do **not** need a system-wide CUDA toolkit: the CUDA and cuDNN libraries install as pip packages (about 1.15 GB).
@@ -94,14 +96,26 @@ Each result is a `Plate` with these fields:
 | `region` | `str` or `None` | Predicted country or region, e.g. `"Czech Republic"` |
 | `region_confidence` | `float` or `None` | Confidence of the region prediction |
 
+If you already have a cropped plate, from your own detector for example, `reader.read_crop(crop)` runs only the OCR and returns `(text, confidence)`.
+
 ## Benchmarking
 
 ```bash
 git clone --depth 1 https://github.com/openalpr/benchmarks.git data/openalpr_benchmarks
-python evaluate.py --sets eu br us --failures outputs/failures.json
+hf download Dataclusterlabspvtltd/indian-number-plates-dataset --repo-type dataset --local-dir data/indian_datacluster
+hf download zenitsu09/indian-number-plate --repo-type dataset --local-dir data/indian_zenitsu
+pip install pandas pyarrow   # needed for the in_crops set
+
+python evaluate.py --sets eu br us in_full in_crops --failures outputs/failures.json
 ```
 
-This prints plate-found rate, exact-match accuracy, character accuracy and latency (median and 95th percentile) for each set. It also writes every misread to the failures file so you can inspect them.
+| Set | What it contains |
+|---|---|
+| `eu`, `br`, `us` | OpenALPR benchmark: full car photos, one plate each |
+| `in_full` | Indian full photos, several plates each (Datacluster Labs sample, 25 plates with text labels) |
+| `in_crops` | Indian plate crops from about 30 states (1,684 plates). Tests the OCR only; detection is skipped. |
+
+This prints, for each set: the share of plates found, exact-match accuracy (also with O and 0 counted as the same), character accuracy, extra detections and latency (median and 95th percentile). It also writes every misread to the failures file so you can inspect them.
 
 ## Deployment notes
 

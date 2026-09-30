@@ -1,0 +1,2 @@
+# Shell scripts run on Linux training boxes; never check them out with CRLF.
+*.sh text eol=lf
